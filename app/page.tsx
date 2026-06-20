@@ -58,7 +58,7 @@ export default function Page() {
           <div className="rounded-md bg-[#1e1f22] px-3 py-3 text-[#8e9297] text-xs font-mono leading-relaxed">
             <span className="text-[#4e5058]"># Direct image URL format</span>
             <br />
-            https://yoursite.com/ping/<span className="text-[#c9cdfb]">USER_ID</span>.png
+            https://yoursite.com/ping/<span className="text-[#c9cdfb]">USER_ID</span>.gif
           </div>
         </div>
       </div>

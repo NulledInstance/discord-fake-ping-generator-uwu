@@ -26,7 +26,7 @@ export default function PingDemo() {
   const [imgKey, setImgKey] = useState(0)
 
   const isValidId = /^\d{17,20}$/.test(userId.trim())
-  const pingUrl = isValidId ? `/ping/${userId.trim()}.png` : null
+  const pingUrl = isValidId ? `/ping/${userId.trim()}.gif` : null
 
   const handleIdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setUserId(e.target.value)

@@ -1,15 +1,31 @@
-import { ImageResponse } from "@vercel/og"
 import { NextRequest, NextResponse } from "next/server"
 import { fetchDiscordUser } from "@/lib/discord"
+import { rasterizeText, CHAR_W, CHAR_H } from "@/lib/bitmap-font"
+import { encodeGif } from "@/lib/gif-encoder"
 
-export const runtime = "edge"
+// Node runtime — no edge needed, lighter for buffer work
+export const runtime = "nodejs"
 
 function parseUserId(raw: string): string {
-  return raw.replace(/\.(webp|png)$/, "")
+  return raw.replace(/\.(gif|png|webp)$/, "")
 }
 
+// Discord dark-mode mention pill colours (from spec)
+// BG:  #292c51  → rgb(41, 44, 81)
+// FG:  #a9bbff  → rgb(169, 187, 255)
+const BG_COLOR: [number, number, number] = [41, 44, 81]
+const FG_COLOR: [number, number, number] = [169, 187, 255]
+
+const SCALE = 2  // 2× upscale so the pill reads clearly at Discord's small embed size
+const PAD_X = 5  // horizontal padding (pre-scale pixels)
+const PAD_Y = 3  // vertical padding (pre-scale pixels)
+// Corner radius in pre-scale pixels (applied as simple rectangle fill — GIF pixels only)
+// GIF doesn't support transparency natively without a transparent index; we round corners
+// by coloring them as background.
+const RADIUS = 2
+
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ userId: string }> }
 ) {
   const { userId: rawUserId } = await params
@@ -20,55 +36,52 @@ export async function GET(
   }
 
   const user = await fetchDiscordUser(userId)
-  const displayName = user?.displayName ?? "Unknown User"
+  const displayName = user?.displayName ?? "unknown"
+  const label = `@${displayName}`
 
-  // Discord mention pill colours (dark mode, solid blurple background)
-  const BG = "#5865F2"       // solid Discord blurple
-  const TEXT = "#FFFFFF"      // white text
+  // --- rasterize text at 1× scale ---
+  const { pixels: pix1x, width: w1, height: h1 } = rasterizeText(label, PAD_X, PAD_Y)
 
-  // 14px font, roughly 8.4px per char average for Inter/sans-serif at this size
-  const fontSize = 14
-  const charWidth = 8.0
-  const paddingX = 8   // 8px each side
-  const paddingY = 4   // 4px top & bottom
-  const pillWidth = Math.ceil(displayName.length * charWidth + paddingX * 2 + 4) // +4 for the "@"
-  const pillHeight = fontSize + paddingY * 2 + 2  // ~24px
-
-  const imageResponse = new ImageResponse(
-    (
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          width: pillWidth,
-          height: pillHeight,
-          background: BG,
-          borderRadius: "3px",
-          paddingLeft: `${paddingX}px`,
-          paddingRight: `${paddingX}px`,
-          fontFamily: '"Inter", "Noto Sans", sans-serif',
-          fontSize: `${fontSize}px`,
-          fontWeight: 500,
-          lineHeight: 1,
-          whiteSpace: "nowrap",
-          color: TEXT,
-        }}
-      >
-        {"@"}{displayName}
-      </div>
-    ),
-    {
-      width: pillWidth,
-      height: pillHeight,
+  // --- apply rounded corners at 1× (zero-out corner pixels) ---
+  for (let y = 0; y < h1; y++) {
+    for (let x = 0; x < w1; x++) {
+      const dx = Math.min(x, w1 - 1 - x)
+      const dy = Math.min(y, h1 - 1 - y)
+      // Pythagorean corner rounding
+      if (dx < RADIUS && dy < RADIUS) {
+        const dist = Math.sqrt((RADIUS - dx - 0.5) ** 2 + (RADIUS - dy - 0.5) ** 2)
+        if (dist > RADIUS) {
+          pix1x[y * w1 + x] = 2 // mark as "outside" (transparent corner) → use BG
+        }
+      }
     }
-  )
+  }
 
-  imageResponse.headers.set(
-    "Cache-Control",
-    "public, s-maxage=60, stale-while-revalidate=300"
-  )
-  imageResponse.headers.set("Content-Type", "image/png")
+  // --- upscale to 2× ---
+  const w = w1 * SCALE
+  const h = h1 * SCALE
+  const pixels = new Uint8Array(w * h)
+  for (let y = 0; y < h1; y++) {
+    for (let x = 0; x < w1; x++) {
+      const src = pix1x[y * w1 + x]
+      // map: 0=bg→BG(index 0), 1=fg→FG(index 1), 2=outside→BG(index 0)
+      const idx = src === 1 ? 1 : 0
+      for (let sy = 0; sy < SCALE; sy++) {
+        for (let sx = 0; sx < SCALE; sx++) {
+          pixels[(y * SCALE + sy) * w + (x * SCALE + sx)] = idx
+        }
+      }
+    }
+  }
 
-  return imageResponse
+  const gif = encodeGif(pixels, w, h, [BG_COLOR, FG_COLOR])
+
+  return new NextResponse(gif, {
+    status: 200,
+    headers: {
+      "Content-Type": "image/gif",
+      "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",
+      "Content-Length": gif.length.toString(),
+    },
+  })
 }
